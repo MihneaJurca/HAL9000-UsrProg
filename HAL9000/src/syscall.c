@@ -5,6 +5,7 @@
 #include "syscall_func.h"
 #include "syscall_no.h"
 #include "mmu.h"
+#include "thread_internal.h"
 #include "process_internal.h"
 #include "dmp_cpu.h"
 #include "thread.h"
@@ -42,6 +43,7 @@ cl_strcat(
 #define SYSCALL_IF_VERSION_KM       SYSCALL_IMPLEMENTED_IF_VERSION
 #define TAG_MAP_PROCESS 'PAMP'
 #define TAG_MAP_FILE 'PAMF'
+#define TAG_MAP_THREAD 'RHT'
 #define STR_ALOC 'RTS'
 #define STR_APP 'RTSA'
 #define STR_APP_NEW 'RTSN'
@@ -83,6 +85,23 @@ DeleteProcessByUM_HANDLE(
 );
 
 STATUS
+InsertInUM_HandleMapThread(
+    IN UM_HANDLE* FileHandle,
+    IN PTHREAD     Thread
+);
+
+STATUS
+DeleteThreadByUM_HANDLE(
+    IN UM_HANDLE ThreadHandle
+);
+
+STATUS
+FindThreadByUM_HANDLE(
+    IN UM_HANDLE ThreadHandle,
+    OUT PTHREAD* pThread
+);
+
+STATUS
 IncrementUM_HandleValueForProcess(
     INOUT PPROCESS Process
 );
@@ -99,6 +118,12 @@ typedef struct _UM_HANDLE_FILE_ELEMENT {
     PFILE_OBJECT    FileObject;
     LIST_ENTRY  ListEntry;
 }UM_HANDLE_FILE_ELEMENT, * PUM_HANDLE_FILE_ELEMENT;
+
+typedef struct _UM_HANDLE_THREAD_ELEMENT {
+    UM_HANDLE   Um_Handle;
+    PTHREAD    Thread;
+    LIST_ENTRY  ListEntry;
+}UM_HANDLE_THREAD_ELEMENT, * PUM_HANDLE_THREAD_ELEMENT;
 
 
 void
@@ -168,9 +193,6 @@ SyscallHandler(
         case SyscallIdProcessExit:
             status = SyscallProcessExit((STATUS)*pSyscallParameters);
             break;
-        case SyscallIdThreadExit:
-            status = SyscallThreadExit((STATUS)*pSyscallParameters);
-            break;
         case SyscallIdProcessCreate:
             status = SyscallProcessCreate(
                 (char*)pSyscallParameters[0],
@@ -218,6 +240,21 @@ SyscallHandler(
             status = SyscallFileClose(
                 (UM_HANDLE)*pSyscallParameters
             );
+            break;
+        case SyscallIdThreadExit:
+            status = SyscallThreadExit((STATUS)*pSyscallParameters);
+            break;
+        case SyscallIdThreadCloseHandle:
+            status = SyscallThreadCloseHandle((UM_HANDLE)*pSyscallParameters);
+            break;
+        case SyscallIdThreadCreate:
+            status = SyscallThreadCreate((PFUNC_ThreadStart)pSyscallParameters[0], (PVOID)pSyscallParameters[1], (UM_HANDLE*)pSyscallParameters[2]);
+            break;
+        case SyscallIdThreadGetTid:
+            status = SyscallThreadGetTid((UM_HANDLE)pSyscallParameters[0], (TID*)pSyscallParameters[1]);
+            break;
+        case SyscallIdThreadWaitForTermination:
+            status = SyscallThreadWaitForTermination((UM_HANDLE)pSyscallParameters[0], (STATUS*)pSyscallParameters[1]);
             break;
         default:
             LOG_ERROR("Unimplemented syscall called from User-space!\n");
@@ -365,17 +402,6 @@ SyscallProcessExit(
     //LOGL("ProcessExit3\n");
    return STATUS_SUCCESS;
     
-}
-
-STATUS
-SyscallThreadExit(
-    IN  STATUS                      ExitStatus
-)
-{
-    //LOGL("ThreadExi1t\n");
-    ThreadExit(ExitStatus);
-    //LOGL("ThreadExit2\n");
-    return STATUS_SUCCESS;
 }
 
 STATUS
@@ -905,6 +931,239 @@ DeleteFileByUM_HANDLE(
 }
 
 
+// ===========================================================================================  THREAD SYSCALLS  ======================================
+STATUS
+IncrementUM_HandleValue(
+    INOUT PPROCESS Process
+)
+{
+    Process->UM_HANDLE_VALUE += UM_HANDLE_INCREMENT;
+    return STATUS_SUCCESS;
+}
+
+STATUS
+DeleteThreadByUM_HANDLE(
+    IN UM_HANDLE ThreadHandle
+)
+{
+    LIST_ITERATOR ListIterator;
+    PLIST_ENTRY pListEntry;
+    PLIST_ENTRY UM_HandleMapThreadList;
+    PUM_HANDLE_THREAD_ELEMENT MapElement;
+    BOOLEAN found;
+    UM_HandleMapThreadList = &GetCurrentProcess()->UM_HandleMapThread;
+
+    found = FALSE;
+
+    ListIteratorInit(UM_HandleMapThreadList, &ListIterator);
+
+    while ((pListEntry = ListIteratorNext(&ListIterator)) != NULL) {
+        MapElement = CONTAINING_RECORD(pListEntry, UM_HANDLE_THREAD_ELEMENT, ListEntry);
+        if (MapElement->Um_Handle == ThreadHandle) {
+            RemoveEntryList(pListEntry);
+            found = TRUE;
+            break;
+        }
+    }
+
+    if (found) {
+        return STATUS_SUCCESS;
+    }
+    else {
+        return STATUS_UNSUCCESSFUL;
+    }
+}
+
+STATUS
+FindThreadByUM_HANDLE(
+    IN UM_HANDLE ThreadHandle,
+    OUT PTHREAD* pThread
+)
+{
+    LIST_ITERATOR ListIterator;
+    PLIST_ENTRY pListEntry;
+    PLIST_ENTRY UM_HandleMapFileList;
+    BOOLEAN Found;
+    PUM_HANDLE_THREAD_ELEMENT MapElement;
+
+    Found = FALSE;
+    UM_HandleMapFileList = &GetCurrentProcess()->UM_HandleMapThread;
+
+    ListIteratorInit(UM_HandleMapFileList, &ListIterator);
+
+    while ((pListEntry = ListIteratorNext(&ListIterator)) != NULL) {
+        MapElement = CONTAINING_RECORD(pListEntry, UM_HANDLE_THREAD_ELEMENT, ListEntry);
+        if (MapElement->Um_Handle == ThreadHandle) {
+            *pThread = MapElement->Thread;
+            Found = TRUE;
+            break;
+        }
+    }
+
+    if (Found) {
+        return STATUS_SUCCESS;
+    }
+    else {
+        return STATUS_NO_DATA_AVAILABLE;
+    }
+}
+
+STATUS
+InsertInUM_HandleMapThread(
+    IN UM_HANDLE* ThreadHandle,
+    IN PTHREAD     Thread
+)
+{
+    STATUS Status;
+
+    Status = STATUS_SUCCESS;
+
+    PUM_HANDLE_THREAD_ELEMENT map_elem = (PUM_HANDLE_THREAD_ELEMENT)ExAllocatePoolWithTag(PoolAllocateZeroMemory, sizeof(PUM_HANDLE_THREAD_ELEMENT), TAG_MAP_THREAD, PAGE_SIZE);
+
+    if (map_elem == NULL) {
+        LOG_FUNC_ERROR("ExAllocatePoolWithTag", STATUS_HEAP_INSUFFICIENT_RESOURCES);
+    }
+    else {
+        map_elem->Um_Handle = *ThreadHandle;
+        map_elem->Thread = Thread;
+        PLIST_ENTRY UM_HandleMapThList = &GetCurrentProcess()->UM_HandleMapThread;
+        InsertTailList(UM_HandleMapThList, &map_elem->ListEntry);
+
+    }
+    return Status;
+}
+
+STATUS
+SyscallThreadExit(
+    IN  STATUS                      ExitStatus
+)
+{
+    ThreadExit(ExitStatus);
+    return STATUS_SUCCESS;
+}
+
+STATUS
+SyscallThreadCreate(
+    IN      PFUNC_ThreadStart       StartFunction,
+    IN_OPT  PVOID                   Context,
+    OUT     UM_HANDLE* ThreadHandle
+)
+{
+    PTHREAD pThread;
+    PPROCESS pProcess;
+    STATUS status;
+
+    if (StartFunction == NULL) { return STATUS_UNSUCCESSFUL; }
+
+    if (ThreadHandle == UM_INVALID_HANDLE_VALUE) { return STATUS_UNSUCCESSFUL; }
+
+    pProcess = GetCurrentProcess();
+
+    if (MmuIsBufferValid((PVOID)StartFunction, sizeof(PFUNC_ThreadStart), PAGE_RIGHTS_ALL, GetCurrentProcess()) != STATUS_SUCCESS) { return STATUS_UNSUCCESSFUL; }
+
+    if (MmuIsBufferValid((UM_HANDLE*)ThreadHandle, sizeof(UM_HANDLE), PAGE_RIGHTS_WRITE, GetCurrentProcess()) != STATUS_SUCCESS) { return STATUS_UNSUCCESSFUL; }
+
+    if (MmuIsBufferValid((PVOID)Context, sizeof(PVOID), PAGE_RIGHTS_READ, GetCurrentProcess()) != STATUS_SUCCESS) { return STATUS_UNSUCCESSFUL; }
+
+    char nameTh[MAX_PATH];
+    status = ThreadCreateEx(nameTh, 16, StartFunction, Context, &pThread, GetCurrentProcess());
+
+
+    if (status != STATUS_SUCCESS) {
+        return STATUS_UNSUCCESSFUL;
+    }
+
+
+    *ThreadHandle = pProcess->UM_HANDLE_VALUE;
+
+    IncrementUM_HandleValue(pProcess);
+
+    if (pProcess != NULL) {
+        InsertInUM_HandleMapThread(ThreadHandle, pThread);
+    }
+
+    return status;
+}
+
+STATUS
+SyscallThreadGetTid(
+    IN_OPT  UM_HANDLE               ThreadHandle,
+    OUT     TID* ThreadId
+)
+{
+    PTHREAD pThread;
+    STATUS status;
+
+    if (ThreadId == NULL) { return STATUS_UNSUCCESSFUL; }
+
+    status = FindThreadByUM_HANDLE(ThreadHandle, &pThread);
+
+    if (status != STATUS_SUCCESS) {
+        PTHREAD pThread2 = GetCurrentThread();
+        *ThreadId = pThread2->Id;
+        return STATUS_SUCCESS;
+    }
+
+    *ThreadId = ThreadGetId(pThread);
+    return status;
+}
+
+
+STATUS
+SyscallThreadWaitForTermination(
+    IN      UM_HANDLE               ThreadHandle,
+    OUT     STATUS* TerminationStatus
+)
+{
+    PTHREAD pThread;
+    PPROCESS pProcess;
+    STATUS status;
+
+    if (TerminationStatus == NULL) { return STATUS_UNSUCCESSFUL; }
+
+
+    pProcess = GetCurrentProcess();
+
+    status = FindThreadByUM_HANDLE(ThreadHandle, &pThread);
+
+    if (status != STATUS_SUCCESS) {
+
+        return status;
+    }
+
+    ThreadWaitForTermination(pThread, TerminationStatus);
+
+    return status;
+}
+
+STATUS
+SyscallThreadCloseHandle(
+    IN      UM_HANDLE               ThreadHandle
+)
+{
+    PTHREAD pThread;
+    PPROCESS pProcess;
+    STATUS status;
+
+    /*if (MmuIsBufferValid((TID*)ThreadId, sizeof(TID), PAGE_RIGHTS_WRITE, GetCurrentProcess()) != STATUS_SUCCESS) {
+        return STATUS_UNSUCCESSFUL;
+    }*/
+
+    pProcess = GetCurrentProcess();
+
+    status = FindThreadByUM_HANDLE(ThreadHandle, &pThread);
+
+    if (status != STATUS_SUCCESS) {
+
+        return status;
+    }
+
+    ThreadCloseHandle(pThread);
+
+    status = DeleteThreadByUM_HANDLE(ThreadHandle);
+
+    return status;
+}
 
 STATUS
 IncrementUM_HandleValueForProcess(

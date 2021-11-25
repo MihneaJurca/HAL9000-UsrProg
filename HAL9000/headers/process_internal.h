@@ -62,6 +62,9 @@ typedef struct _PROCESS
     //Map handle to pfile
     LIST_ENTRY      UM_HandleMapFile;
 
+    //Map handle to pThread
+    LIST_ENTRY      UM_HandleMapThread;
+
     //current vlue of UM_HANDLE
     QWORD UM_HANDLE_VALUE;
 

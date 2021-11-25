@@ -313,6 +313,9 @@ ProcessCreate(
 
             //Initilize the list that will map the UM_Handle to PPROCESS
             InitializeListHead(&pProcess->UM_HandleMapFile);
+
+            InitializeListHead(&pProcess->UM_HandleMapThread);
+
             pProcess->StdOutDisabled = FALSE;
             *Process = pProcess;
         }

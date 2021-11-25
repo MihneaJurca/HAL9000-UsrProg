@@ -12,22 +12,22 @@
 #define UNDEFINED_INTERRUPT_TEXT                "UNKNOWN INTERRUPT"
 #define STACK_BYTES_TO_DUMP_ON_EXCEPTION        0x100
 
-const char EXCEPTION_NAME[ExceptionVirtualizationException+1][MAX_PATH] = { "#DE - Divide Error", "#DB - Debug Exception", "NMI Interrupt",
+const char EXCEPTION_NAME[ExceptionVirtualizationException + 1][MAX_PATH] = { "#DE - Divide Error", "#DB - Debug Exception", "NMI Interrupt",
                                                                             "#BP - Breakpoint Exception", "#OF - Overflow Exception", "#BR - BOUND Range Exceeded Exception",
                                                                             "#UD - Invalid Opcode Exception", "#NM - Device Not Available Exception", "#DF - Double Fault Exception",
                                                                             "Coprocessor Segment Overrun", "#TS - Invalid TSS Exception", "#NP - Segment Not Present",
                                                                             "#SS - Stack Fault Exception", "#GP - General Protection Exception", "#PF - Page-Fault Exception",
                                                                             UNDEFINED_INTERRUPT_TEXT, "#MF - x87 FPU Floating-Point Error", "#AC - Alignment Check",
                                                                             "#MC - Machine-Check Exception", "#XM - SIMD Floating-Point Exception", "#VE - Virtualization Exception"
-                                                                        };
+};
 
-const char INTERRUPT_NAME[NO_OF_IRQS][MAX_PATH] = {     "Timer", "Keyboard", "Cascade",
+const char INTERRUPT_NAME[NO_OF_IRQS][MAX_PATH] = { "Timer", "Keyboard", "Cascade",
                                                         "COM2", "COM1", UNDEFINED_INTERRUPT_TEXT,
                                                         "Diskette", "LPT1", "CMOS RTC",
                                                         "CGA", UNDEFINED_INTERRUPT_TEXT,UNDEFINED_INTERRUPT_TEXT
                                                         UNDEFINED_INTERRUPT_TEXT, "FPU","Hard Disk",UNDEFINED_INTERRUPT_TEXT,
                                                         UNDEFINED_INTERRUPT_TEXT
-                                                        };
+};
 
 static PFUNC_IsrRoutine m_isrRoutines[NO_OF_USABLE_INTERRUPTS] = { NULL };
 static PVOID m_isrContexts[NO_OF_USABLE_INTERRUPTS] = { NULL };
@@ -38,14 +38,14 @@ _IsrExceptionHandler(
     IN BYTE                         InterruptIndex,
     IN PINTERRUPT_STACK_COMPLETE    StackPointer,
     IN BOOLEAN                      ErrorCodeAvailable,
-    IN COMPLETE_PROCESSOR_STATE*    ProcessorState
-    );
+    IN COMPLETE_PROCESSOR_STATE* ProcessorState
+);
 
 static
 void
 _IsrInterruptHandler(
     IN BYTE             InterruptIndex
-    );
+);
 
 
 void
@@ -53,8 +53,8 @@ IsrCommonHandler(
     IN BYTE                                 InterruptIndex,
     IN PINTERRUPT_STACK_COMPLETE            StackPointer,
     IN BOOLEAN                              ErrorCodeAvailable,
-    IN COMPLETE_PROCESSOR_STATE*            ProcessorState
-    )
+    IN COMPLETE_PROCESSOR_STATE* ProcessorState
+)
 {
     PPCPU pPcpu;
 
@@ -85,8 +85,8 @@ _IsrExceptionHandler(
     IN BYTE                         InterruptIndex,
     IN PINTERRUPT_STACK_COMPLETE    StackPointer,
     IN BOOLEAN                      ErrorCodeAvailable,
-    IN COMPLETE_PROCESSOR_STATE*             ProcessorState
-    )
+    IN COMPLETE_PROCESSOR_STATE* ProcessorState
+)
 {
     DWORD errorCode;
     BOOLEAN exceptionHandled;
@@ -113,7 +113,7 @@ _IsrExceptionHandler(
 
         pfAddr = __readcr2();
         LOG_TRACE_EXCEPTION("#PF address: 0x%X\n", pfAddr);
-        exceptionHandled = MmuSolvePageFault(pfAddr, errorCode );
+        exceptionHandled = MmuSolvePageFault(pfAddr, errorCode);
         if (!exceptionHandled)
         {
             PPCPU pCpu;
@@ -129,11 +129,11 @@ _IsrExceptionHandler(
                 {
                     // memory accessed is directly below the stack (in the unmapped stack guard area)
                     LOG_ERROR("Stack overflow\n"
-                              "Stack in range [0x%X, 0x%X]\n"
-                              "#PF is at 0x%X\n",
-                              pStackBottom, pCpu->StackTop,
-                              pfAddr
-                              );
+                        "Stack in range [0x%X, 0x%X]\n"
+                        "#PF is at 0x%X\n",
+                        pStackBottom, pCpu->StackTop,
+                        pfAddr
+                    );
                 }
             }
         }
@@ -143,12 +143,15 @@ _IsrExceptionHandler(
         LOG_TRACE_EXCEPTION("RSP[0]: 0x%X\n", *((QWORD*)StackPointer->Registers.Rsp));
     }
 
-    if (!exceptionHandled) {
-        if (!GdtIsSegmentPrivileged((WORD)StackPointer->Registers.CS)) {
-            ProcessTerminate(NULL);
+    if (!exceptionHandled)
+    {
+        if (!GdtIsSegmentPrivileged((WORD)StackPointer->Registers.CS))
+        {
+            PPROCESS currProcess = GetCurrentProcess();
+            LOG_TRACE_EXCEPTION("Terminating process %s\n", ProcessGetName(currProcess));
+            ProcessTerminate(currProcess);
         }
     }
-
 
     // no use in logging if we solved the problem
     if (!exceptionHandled)
@@ -159,7 +162,7 @@ _IsrExceptionHandler(
 
         LOG_ERROR("Could not handle exception 0x%x [%s]\n", InterruptIndex, EXCEPTION_NAME[InterruptIndex]);
 
-        DumpInterruptStack(StackPointer, ErrorCodeAvailable );
+        DumpInterruptStack(StackPointer, ErrorCodeAvailable);
         DumpControlRegisters();
         DumpProcessorState(ProcessorState);
 
@@ -167,12 +170,12 @@ _IsrExceptionHandler(
 
         pCpu = GetCurrentPcpu();
 
-        pCurrentStackItem = (PVOID*) max(StackPointer->Registers.Rsp,
-                                         pCpu != NULL ? (QWORD) PtrDiff(pCpu->StackTop, (QWORD) pCpu->StackSize)
-                                                      : StackPointer->Registers.Rsp);
-        noOfStackElementsToDump = (DWORD) (min(STACK_BYTES_TO_DUMP_ON_EXCEPTION,
-                                               pCpu != NULL ? PtrDiff(pCpu->StackTop,pCurrentStackItem) : STACK_BYTES_TO_DUMP_ON_EXCEPTION)
-                                           / sizeof(PVOID));
+        pCurrentStackItem = (PVOID*)max(StackPointer->Registers.Rsp,
+            pCpu != NULL ? (QWORD)PtrDiff(pCpu->StackTop, (QWORD)pCpu->StackSize)
+            : StackPointer->Registers.Rsp);
+        noOfStackElementsToDump = (DWORD)(min(STACK_BYTES_TO_DUMP_ON_EXCEPTION,
+            pCpu != NULL ? PtrDiff(pCpu->StackTop, pCurrentStackItem) : STACK_BYTES_TO_DUMP_ON_EXCEPTION)
+            / sizeof(PVOID));
         for (DWORD i = 0; i < noOfStackElementsToDump; ++i)
         {
             LOG("[0x%X]: 0x%X\n", &pCurrentStackItem[i], pCurrentStackItem[i]);
@@ -186,7 +189,7 @@ static
 void
 _IsrInterruptHandler(
     IN BYTE             InterruptIndex
-    )
+)
 {
     BOOLEAN interruptHandled;
     BOOLEAN bSpuriousInterrupt;
@@ -245,11 +248,11 @@ IsrInstallEx(
     IN      BYTE                Vector,
     IN      PFUNC_IsrRoutine    IsrRoutine,
     IN_OPT  PVOID               Context
-    )
+)
 {
     BYTE indexInRoutines;
 
-    ASSERT( Vector > NO_OF_RESERVED_EXCEPTIONS);
+    ASSERT(Vector > NO_OF_RESERVED_EXCEPTIONS);
 
     indexInRoutines = Vector - NO_OF_RESERVED_EXCEPTIONS;
 
